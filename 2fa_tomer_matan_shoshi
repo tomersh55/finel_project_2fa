@@ -1,0 +1,150 @@
+import tkinter as tk
+from tkinter import messagebox
+import time
+import random
+import threading
+from twilio.rest import Client
+import mysql.connector
+
+# חיבור למסד נתונים MySQL
+db = mysql.connector.connect(
+    host="sql12.freesqldatabase.com",  # החלף עם שם המארח שלך
+    user="sql12664200",  # החלף עם שם המשתמש שלך
+    password="bvHpJ3iUrR",  # החלף עם הסיסמה שלך
+    database="sql12664200"  # החלף עם שם מסד הנתונים שלך
+)
+cursor = db.cursor(dictionary=True)
+
+
+# בדיקת אימות הכניסה
+def check_login(username, password):
+    cursor.execute("SELECT * FROM users WHERE username = %s", (username,))
+    global user_data
+    user_data = cursor.fetchone()
+
+    if not user_data:
+        messagebox.showerror("שגיאה", "שם המשתמש לא קיים")
+        return
+
+    if user_data["password"] != password:
+        messagebox.showerror("שגיאה", "סיסמה לא נכונה")
+        return
+
+    current_hour = time.localtime().tm_hour
+    if not user_data["allowed_hours_start"] <= current_hour <= user_data["allowed_hours_end"]:
+        messagebox.showerror("שגיאה", "התחברת מחוץ לשעות הפעילות של התוכנה")
+        return
+
+    cursor.execute("SELECT login_count FROM login_records WHERE username = %s", (username,))
+    login_record = cursor.fetchone()
+    if login_record and login_record["login_count"] >= user_data["max_logins"]:
+        messagebox.showerror("שגיאה", "חריגה בכמות הכניסות")
+        return
+
+    if user_data["current_login_duration"] >= user_data["time_limit"]:
+        messagebox.showerror("שגיאה", "חרגת מהזמן המותר לחיבור")
+        return
+
+    # Send 2FA code to sms
+    code = str(random.randint(1000, 9999))
+    send_sms(user_data["phone"], f"Your verification code is: {code}")
+
+    open_2fa_window(code, username)
+
+
+def send_sms(to_phone, message):
+    # Your Twilio account details
+    account_sid = "ACbd3505afc7162129a858b0782cf1f055"
+    auth_token = "5739a3de62bb03d7cb19fef43c5ab0a1"
+    twilio_phone = "+12565769944"
+
+    client = Client(account_sid, auth_token)
+    client.messages.create(body=message, from_=twilio_phone, to=to_phone)
+
+
+def open_2fa_window(code, username):
+    def on_submit_click():
+        verification = entry_verification_code.get()
+        if verification == code:
+            messagebox.showinfo("תוצאה", "התחברת בהצלחה")
+            update_login_count(username)
+            two_fa_window.destroy()
+            # הפעלת עדכון זמן החיבור ברקע
+            threading.Thread(target=background_login_duration_update, args=(username,), daemon=True).start()
+        else:
+            messagebox.showerror("שגיאה", "קוד 2FA שגוי")
+
+    two_fa_window = tk.Toplevel(app)
+    two_fa_window.title("אימות כפול")
+
+    label_verification = tk.Label(two_fa_window, text="הזן את קוד האימות")
+    label_verification.pack(pady=10)
+
+    entry_verification_code = tk.Entry(two_fa_window)
+    entry_verification_code.pack(pady=10)
+
+    btn_submit = tk.Button(two_fa_window, text="שלח", command=on_submit_click)
+    btn_submit.pack(pady=10)
+
+
+def update_login_count(username):
+    cursor.execute("SELECT login_count FROM login_records WHERE username = %s", (username,))
+    login_record = cursor.fetchone()
+    new_login_count = login_record["login_count"] + 1
+    cursor.execute("UPDATE login_records SET login_count = %s WHERE username = %s", (new_login_count, username))
+    db.commit()
+
+
+def update_login_duration(username):
+    cursor.execute("SELECT current_login_duration, time_limit FROM users WHERE username = %s", (username,))
+    result = cursor.fetchone()
+    current_duration, time_limit = result["current_login_duration"], result["time_limit"]
+
+    if current_duration >= time_limit:
+        messagebox.showerror("שגיאה", "חרגת מהזמן המותר לחיבור. המערכת תנתק אותך כעת.")
+        app.quit()  # סגירת היישום
+        return
+
+    # מעדכנים את זמן החיבור רק אם המשתמש לא חרג מהזמן המותר
+    new_duration = current_duration + 1  # מוסיפים דקה
+    cursor.execute("UPDATE users SET current_login_duration = %s WHERE username = %s", (new_duration, username))
+    db.commit()
+
+
+def background_login_duration_update(username):
+    while True:
+        try:
+            db.reconnect(attempts=3, delay=5)  # נסיון להתחברות מחדש למסד הנתונים
+            update_login_duration(username)
+            time.sleep(60)  # ממתינים דקה לפני העדכון הבא
+        except Exception as e:
+            print(f"Error updating login duration: {e}")
+            break
+
+
+# GUI
+def on_login_click():
+    username = entry_username.get()
+    password = entry_password.get()
+    check_login(username, password)
+    # הפעלת עדכון זמן החיבור ברקע
+    threading.Thread(target=background_login_duration_update, args=(username,), daemon=True).start()
+
+
+app = tk.Tk()
+app.title("התחברות")
+
+label_username = tk.Label(app, text="שם משתמש")
+label_username.pack(pady=10)
+entry_username = tk.Entry(app)
+entry_username.pack(pady=10)
+
+label_password = tk.Label(app, text="סיסמה")
+label_password.pack(pady=10)
+entry_password = tk.Entry(app, show='*')
+entry_password.pack(pady=10)
+
+btn_login = tk.Button(app, text="התחבר", command=on_login_click)
+btn_login.pack(pady=10)
+
+app.mainloop()
