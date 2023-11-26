@@ -8,10 +8,10 @@ import mysql.connector
 
 # חיבור למסד נתונים MySQL
 db = mysql.connector.connect(
-    host="sql12.freesqldatabase.com",  # החלף עם שם המארח שלך
-    user="sql12664200",  # החלף עם שם המשתמש שלך
-    password="bvHpJ3iUrR",  # החלף עם הסיסמה שלך
-    database="sql12664200"  ך
+    host="sql12.freesqldatabase.com",  
+    user="sql12664200", 
+    password="bvHpJ3iUrR", 
+    database="sql12664200"  
 )
 cursor = db.cursor(dictionary=True)
 
